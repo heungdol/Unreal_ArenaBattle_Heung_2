@@ -1,13 +1,16 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
+#include "Character/ABCharacterBase.h"
 
 #include "Animation/AnimMontage.h"
-#include "Character/ABCharacterBase.h"
 #include "Components/CapsuleComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 
 #include "ABComboActionData.h"
 #include "ABCharacterControlData.h"
+
+#include "Physics/ABCollision.h"
+#include "Engine/DamageEvents.h"
 
 // Sets default values
 AABCharacterBase::AABCharacterBase()
@@ -19,8 +22,8 @@ AABCharacterBase::AABCharacterBase()
 
 	// Capsule
 	GetCapsuleComponent()->InitCapsuleSize(42.0f, 96.0f);
-	GetCapsuleComponent()->SetCollisionProfileName(TEXT("Pawn"));
-
+	GetCapsuleComponent()->SetCollisionProfileName(CPROFILE_ABCAPSULE);
+	
 	// Movement
 	GetCharacterMovement()->bOrientRotationToMovement = true;
 	GetCharacterMovement()->RotationRate = FRotator(0, 500.0f, 0);
@@ -34,7 +37,7 @@ AABCharacterBase::AABCharacterBase()
 	GetMesh()->SetRelativeLocationAndRotation
 	(FVector(0.0f, 0.0f, -100.0f), FRotator(0.0f, -90.0f, 0.0f));
 	GetMesh()->SetAnimationMode(EAnimationMode::AnimationBlueprint);
-	GetMesh()->SetCollisionProfileName(TEXT("CharacterMesh"));
+	GetMesh()->SetCollisionProfileName(TEXT("NoCollision"));
 	
 	static ConstructorHelpers::FObjectFinder <USkeletalMesh> CharacterMeshRef
 	(TEXT("/Script/Engine.SkeletalMesh'/Game/InfinityBladeWarriors/Character/CompleteCharacters/SK_CharM_Cardboard.SK_CharM_Cardboard'"));
@@ -67,6 +70,26 @@ AABCharacterBase::AABCharacterBase()
 		CharacterControlManager.Add (ECharacterControlType::Quater, QuaterDataRef.Object);
 	}
 
+	static ConstructorHelpers::FObjectFinder <UAnimMontage> ComboActionMontageRef
+	(TEXT("/Script/Engine.AnimMontage'/Game/ArenaBattle/Animation/AM_ComboAttack.AM_ComboAttack'"));
+	if (ComboActionMontageRef.Object != nullptr)
+	{
+		ComboActionMontage = ComboActionMontageRef.Object;
+	}
+
+	static ConstructorHelpers::FObjectFinder <UABComboActionData> ComboActionDataRef
+	(TEXT("/Script/ArenaBattle.ABComboActionData'/Game/ArenaBattle/CharacterAction/ABA_ComboActtack.ABA_ComboActtack'"));
+	if (ComboActionDataRef.Object != nullptr)
+	{
+		ComboActionData = ComboActionDataRef.Object;
+	}
+
+	static ConstructorHelpers::FObjectFinder <UAnimMontage> DeadMontageRef
+	(TEXT("/Script/Engine.AnimMontage'/Game/ArenaBattle/Animation/AM_Dead.AM_Dead'"));
+	if (DeadMontageRef.Object != nullptr)
+	{
+		DeadMontage = DeadMontageRef.Object;
+	}
 }
 
 void AABCharacterBase::SetCharacterControlData(const UABCharacterControlData* CharacterControlData)
@@ -175,5 +198,65 @@ void AABCharacterBase::ComboCheck()
 
 void AABCharacterBase::AttackHitCheck()
 {
+	FHitResult OutHitResult;
+	// 인자: 콜리전을 분석할 때 사용되는 태그 정보, 복잡한 형태의 충돌체를 감치할 것인지, 무시할 액터들
+	// SCENE_QUERY_STAT: 언리얼 엔진에서 제공하는 분석 툴
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(Attack), false, this);
 
+	const float AttackRange = 40.0f;
+	const float AttackRadius = 50.0f;
+	const float AttackDamage = 30.0f;
+
+	const FVector Start = GetActorLocation() + GetActorForwardVector() * GetCapsuleComponent()->GetScaledCapsuleRadius();
+	const FVector End = Start + GetActorForwardVector() * AttackRange;
+
+	bool HitDetected = GetWorld()->SweepSingleByChannel(OutHitResult, Start, End, FQuat::Identity, CCHANNEL_ABACTION, FCollisionShape::MakeSphere (AttackRadius), Params);
+
+	if (HitDetected)
+	{
+		FDamageEvent DamageEvent;
+		OutHitResult.GetActor()->TakeDamage(AttackDamage, DamageEvent, GetController(), this);
+	}
+
+#if ENABLE_DRAW_DEBUG
+
+	FVector CapsuleOrigin = Start + (End - Start) * 0.5f;
+	float CapsuleHalfHeight = AttackRange * 0.5f;
+	FColor DrawColor = HitDetected ? FColor::Green : FColor::Red;
+
+	// 인자: 월드, 시작점, 캡술 반 높이, 반지름, 방향, 색깔, 계속해서 유지할 것인지, 언제까지 유지할 것인지
+	DrawDebugCapsule(GetWorld(), CapsuleOrigin, CapsuleHalfHeight, AttackRadius, FRotationMatrix::MakeFromZ(GetActorForwardVector()).ToQuat (), DrawColor, false, 5.0f);
+
+#endif
+}
+
+float AABCharacterBase::TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser)
+{
+	// EventInstigator: 가해자
+	// DamageCauser: 가해자가 사용한 무기 / 가해자가 빙의한 폰
+	Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
+
+	SetDead();
+
+	return DamageAmount;
+}
+
+void AABCharacterBase::SetDead()
+{
+	GetCharacterMovement()->SetMovementMode(EMovementMode::MOVE_None);
+	PlayDeadAnimation();
+	SetActorEnableCollision(false);
+}
+
+void AABCharacterBase::PlayDeadAnimation()
+{
+	UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
+	
+	// 인자: 블렌드 아웃할 때 걸리는 시간
+	// 0.0f: 즉시 중지
+	// 1.0f: 1초 동안 서서히 섞으며 중지
+	AnimInstance->StopAllMontages(0.0f);
+
+	// 인자: 플레이할 몽타주, 애니메이션 속도
+	AnimInstance->Montage_Play(DeadMontage, 1.0f);
 }

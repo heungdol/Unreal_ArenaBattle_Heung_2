@@ -6,7 +6,6 @@
 #include "GameFramework/Character.h"
 
 #include "Interface/ABAnimationAttackInterface.h"
-//#include "Physics/ABCollision.h"
 
 #include "ABCharacterBase.generated.h"
 
@@ -58,4 +57,19 @@ protected:
 // Attack Hit Section
 protected:
 	virtual void AttackHitCheck() override;
+
+	// 액터에서 이미 구현되어 있음
+	virtual float TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent, class AController* EventInstigator, AActor* DamageCauser) override;
+
+
+// Dead Section
+protected:
+	UPROPERTY (EditAnywhere, BlueprintReadOnly, Category = Stat, Meta = (AllowPrivateAccess = "true"))
+	TObjectPtr <class UAnimMontage> DeadMontage;
+
+	virtual void SetDead();
+
+	void PlayDeadAnimation();
+
+	float DeadEventDelayTime = 5.0f;
 };
