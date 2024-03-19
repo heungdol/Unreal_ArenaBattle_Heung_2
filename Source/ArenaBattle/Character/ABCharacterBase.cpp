@@ -12,6 +12,13 @@
 #include "Physics/ABCollision.h"
 #include "Engine/DamageEvents.h"
 
+#include "CharacterStat/ABCharacterStatComponent.h"
+//#include "Components/WidgetComponent.h"
+
+// 2_07
+#include "UI/ABWidgetComponent.h"
+#include "UI/ABHPBarWidget.h"
+
 // Sets default values
 AABCharacterBase::AABCharacterBase()
 {
@@ -90,6 +97,38 @@ AABCharacterBase::AABCharacterBase()
 	{
 		DeadMontage = DeadMontageRef.Object;
 	}
+
+	// Stat Component
+	Stat = CreateDefaultSubobject <UABCharacterStatComponent> (TEXT ("Stat Component"));
+
+	// Widget Component
+	HPBar = CreateDefaultSubobject <UABWidgetComponent>(TEXT("Widget Component"));
+	HPBar->SetupAttachment(GetMesh());
+	HPBar->SetRelativeLocation(FVector(0, 0, 180.0f));
+
+	static ConstructorHelpers::FClassFinder <UUserWidget> HPBarWidgetRef
+	(TEXT("/Game/ArenaBattle/UI/WBP_HPBar.WBP_HPBar_C"));
+	if (HPBarWidgetRef.Class != nullptr)
+	{
+		// 기본 Class 설정
+		HPBar->SetWidgetClass(HPBarWidgetRef.Class);
+
+		// 2D 스크린 설정
+		HPBar->SetWidgetSpace(EWidgetSpace::Screen);
+
+		// 사이즈 조절
+		HPBar->SetDrawSize(FVector2D(150.0f, 15.0f));
+
+		// 충돌 설정
+		HPBar->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
+}
+
+void AABCharacterBase::PostInitializeComponents()
+{
+	Super::PostInitializeComponents();
+
+	Stat->OnHPZero.AddUObject(this, &AABCharacterBase::SetDead);
 }
 
 void AABCharacterBase::SetCharacterControlData(const UABCharacterControlData* CharacterControlData)
@@ -101,6 +140,18 @@ void AABCharacterBase::SetCharacterControlData(const UABCharacterControlData* Ch
 	GetCharacterMovement ()->bOrientRotationToMovement = CharacterControlData->bOrientRotationToMovement;
 	GetCharacterMovement ()->bUseControllerDesiredRotation = CharacterControlData->bUseControllerDesiredRotation;
 	GetCharacterMovement ()->RotationRate = CharacterControlData->RotationRate;
+}
+
+void AABCharacterBase::SetupCharacterWidget(UABUserWidget* InUserWidget)
+{
+	if (UABHPBarWidget* HPBarWidget = Cast <UABHPBarWidget>(InUserWidget))
+	{
+		HPBarWidget->SetMaxHP(Stat->GetMaxHP ());
+		HPBarWidget->UpdateHPBar(Stat->GetCurrentHP());
+
+		// 2_07 HP 변환 시 위젯을 업데이트 하도록 설정
+		Stat->OnHPChanged.AddUObject(HPBarWidget, &UABHPBarWidget::UpdateHPBar);
+	}
 }
 
 void AABCharacterBase::ProcessComboCommand()
@@ -235,8 +286,9 @@ float AABCharacterBase::TakeDamage(float DamageAmount, FDamageEvent const& Damag
 	// EventInstigator: 가해자
 	// DamageCauser: 가해자가 사용한 무기 / 가해자가 빙의한 폰
 	Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
-
-	SetDead();
+	
+	// 2_07
+	Stat->ApplyDamage(DamageAmount);
 
 	return DamageAmount;
 }
@@ -246,6 +298,8 @@ void AABCharacterBase::SetDead()
 	GetCharacterMovement()->SetMovementMode(EMovementMode::MOVE_None);
 	PlayDeadAnimation();
 	SetActorEnableCollision(false);
+
+	HPBar->SetHiddenInGame(true);
 }
 
 void AABCharacterBase::PlayDeadAnimation()
